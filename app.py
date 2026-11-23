@@ -5,11 +5,6 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 
 import joblib
-import nltk
-
-from nltk.tokenize import word_tokenize
-from nltk.corpus import stopwords
-from nltk.stem import WordNetLemmatizer
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,7 +20,9 @@ from PIL import Image
 
 BASE_DIR = Path(__file__).resolve().parent
 
-DL_MODEL_PATH = BASE_DIR / "DL" / "models" / "MedEquip30_Model" / "best.pt"
+DL_MODEL_PATH = (
+    BASE_DIR / "DL" / "models" / "MedEquip30_Model" / "best.pt"
+)
 
 NLP_MODEL_PATH = (
     BASE_DIR / "NLP" / "models" / "medical_specialty_model.pkl"
@@ -49,44 +46,9 @@ nlp_model = None
 tfidf_vectorizer = None
 label_encoder = None
 
-stop_words = None
-lemmatizer = None
-
 
 # ==========================================
-# 3. NLP RESOURCE SETUP
-# ==========================================
-
-def setup_nltk():
-
-    resources = [
-        ("tokenizers/punkt", "punkt"),
-        ("tokenizers/punkt_tab", "punkt_tab"),
-        ("corpora/stopwords", "stopwords"),
-        ("corpora/wordnet", "wordnet"),
-        ("corpora/omw-1.4", "omw-1.4")
-    ]
-
-    for resource_path, download_name in resources:
-
-        try:
-            nltk.data.find(resource_path)
-
-        except LookupError:
-
-            success = nltk.download(
-                download_name,
-                quiet=True
-            )
-
-            if not success:
-                raise RuntimeError(
-                    f"Could not download NLTK resource: {download_name}"
-                )
-
-
-# ==========================================
-# 4. LOAD BOTH TRAINED MODELS
+# 3. LOAD DL AND NLP MODELS
 # ==========================================
 
 @asynccontextmanager
@@ -96,12 +58,10 @@ async def lifespan(app: FastAPI):
     global nlp_model
     global tfidf_vectorizer
     global label_encoder
-    global stop_words
-    global lemmatizer
 
     print("Loading AI Hospital DL and NLP models...")
 
-    # Check model files
+    # Check whether all model files exist
 
     required_files = [
         DL_MODEL_PATH,
@@ -118,11 +78,7 @@ async def lifespan(app: FastAPI):
                 f"Model file not found: {file_path}"
             )
 
-    # Setup NLTK
-
-    setup_nltk()
-
-    # Load DL model
+    # Load YOLOv8 DL model
 
     dl_model = YOLO(str(DL_MODEL_PATH))
 
@@ -136,9 +92,21 @@ async def lifespan(app: FastAPI):
 
     label_encoder = joblib.load(LABEL_ENCODER_PATH)
 
-    print("NLP model loaded successfully!")
+    print("NLP model files loaded successfully!")
 
-    # Verify feature compatibility
+    # Verify compatibility between SVM and TF-IDF
+
+    if not hasattr(nlp_model, "n_features_in_"):
+
+        raise RuntimeError(
+            "NLP model does not contain the expected feature information."
+        )
+
+    if not hasattr(tfidf_vectorizer, "vocabulary_"):
+
+        raise RuntimeError(
+            "TF-IDF vectorizer vocabulary is not fitted."
+        )
 
     expected_features = nlp_model.n_features_in_
 
@@ -147,28 +115,12 @@ async def lifespan(app: FastAPI):
     if expected_features != actual_features:
 
         raise RuntimeError(
-            "NLP model and TF-IDF feature dimensions do not match."
+            "NLP model and TF-IDF feature dimensions do not match. "
+            f"Model features: {expected_features}, "
+            f"TF-IDF features: {actual_features}"
         )
 
-    # Setup preprocessing objects
-
-    stop_words = set(stopwords.words("english"))
-
-    # Preserve medical negation words as in training
-
-    medical_negations = {
-        "no",
-        "not",
-        "nor",
-        "never",
-        "without",
-        "neither",
-        "none"
-    }
-
-    stop_words = stop_words - medical_negations
-
-    lemmatizer = WordNetLemmatizer()
+    print("NLP feature compatibility verified!")
 
     print("All DL and NLP models loaded successfully!")
 
@@ -178,7 +130,7 @@ async def lifespan(app: FastAPI):
 
 
 # ==========================================
-# 5. CREATE FASTAPI APPLICATION
+# 4. CREATE FASTAPI APPLICATION
 # ==========================================
 
 app = FastAPI(
@@ -194,7 +146,7 @@ app = FastAPI(
 
 
 # ==========================================
-# 6. CORS CONFIGURATION
+# 5. CORS CONFIGURATION
 # ==========================================
 
 app.add_middleware(
@@ -207,16 +159,20 @@ app.add_middleware(
 
 
 # ==========================================
-# 7. NLP TEXT PREPROCESSING
+# 6. NLP TEXT PREPROCESSING
 # ==========================================
 
-def preprocess_text(text: str):
+def preprocess_text(text: str) -> str:
+
+    if not isinstance(text, str):
+
+        return ""
 
     # 1. Convert text to lowercase
 
     text = text.lower()
 
-    # 2. Remove punctuation and special characters
+    # 2. Remove special characters and punctuation
 
     text = re.sub(
         r"[^a-zA-Z0-9\s]",
@@ -224,7 +180,7 @@ def preprocess_text(text: str):
         text
     )
 
-    # 3. Remove extra spaces
+    # 3. Replace multiple spaces with a single space
 
     text = re.sub(
         r"\s+",
@@ -232,38 +188,11 @@ def preprocess_text(text: str):
         text
     ).strip()
 
-    # 4. Tokenization
-
-    tokens = word_tokenize(text)
-
-    # 5. Remove abnormal words
-
-    tokens = [
-        word for word in tokens
-        if word.isalpha() and len(word) > 1
-    ]
-
-    # 6. Remove stopwords
-
-    tokens = [
-        word for word in tokens
-        if word not in stop_words
-    ]
-
-    # 7. Lemmatization
-
-    tokens = [
-        lemmatizer.lemmatize(word)
-        for word in tokens
-    ]
-
-    # 8. Join tokens
-
-    return " ".join(tokens)
+    return text
 
 
 # ==========================================
-# 8. REQUEST MODEL FOR NLP
+# 7. REQUEST MODEL FOR NLP
 # ==========================================
 
 class MedicalTextRequest(BaseModel):
@@ -276,7 +205,7 @@ class MedicalTextRequest(BaseModel):
 
 
 # ==========================================
-# 9. GET API - ROOT
+# 8. GET API - ROOT
 # ==========================================
 
 @app.get("/")
@@ -302,23 +231,21 @@ def home():
 
 
 # ==========================================
-# 10. GET API - HEALTH CHECK
+# 9. GET API - HEALTH CHECK
 # ==========================================
 
 @app.get("/health")
 def health_check():
 
+    models_loaded = all([
+        dl_model is not None,
+        nlp_model is not None,
+        tfidf_vectorizer is not None,
+        label_encoder is not None
+    ])
+
     return {
-        "status": (
-            "healthy"
-            if all([
-                dl_model is not None,
-                nlp_model is not None,
-                tfidf_vectorizer is not None,
-                label_encoder is not None
-            ])
-            else "not_ready"
-        ),
+        "status": "healthy" if models_loaded else "not_ready",
 
         "dl_model_loaded": dl_model is not None,
 
@@ -331,7 +258,7 @@ def health_check():
 
 
 # ==========================================
-# 11. POST API - DL EQUIPMENT DETECTION
+# 10. POST API - DL EQUIPMENT DETECTION
 # ==========================================
 
 @app.post("/predict/equipment")
@@ -357,10 +284,12 @@ async def predict_equipment(
 
         raise HTTPException(
             status_code=400,
-            detail="Please upload a valid image."
+            detail="Please upload a valid JPG, JPEG, PNG or WEBP image."
         )
 
     try:
+
+        # Read uploaded image
 
         image_bytes = await file.read()
 
@@ -371,6 +300,8 @@ async def predict_equipment(
                 detail="Uploaded image is empty."
             )
 
+        # Check image size (10 MB maximum)
+
         if len(image_bytes) > 10 * 1024 * 1024:
 
             raise HTTPException(
@@ -380,9 +311,9 @@ async def predict_equipment(
 
         # Convert uploaded image into RGB
 
-        image = Image.open(
-            io.BytesIO(image_bytes)
-        ).convert("RGB")
+        with Image.open(io.BytesIO(image_bytes)) as uploaded_image:
+
+            image = uploaded_image.convert("RGB")
 
         # YOLOv8 prediction
 
@@ -448,6 +379,8 @@ async def predict_equipment(
 
     except Exception as error:
 
+        print(f"Equipment detection error: {error}")
+
         raise HTTPException(
             status_code=500,
             detail=f"Equipment detection failed: {str(error)}"
@@ -459,7 +392,7 @@ async def predict_equipment(
 
 
 # ==========================================
-# 12. POST API - NLP MEDICAL TEXT CLASSIFICATION
+# 11. POST API - NLP MEDICAL TEXT CLASSIFICATION
 # ==========================================
 
 @app.post("/predict/medical-text")
@@ -479,6 +412,8 @@ def predict_medical_text(
         )
 
     try:
+
+        # Get medical transcription
 
         transcription = request.transcription.strip()
 
@@ -520,6 +455,11 @@ def predict_medical_text(
             prediction
         )[0]
 
+        print(
+            "Medical specialty prediction:",
+            predicted_specialty
+        )
+
         return {
 
             "success": True,
@@ -542,6 +482,8 @@ def predict_medical_text(
 
     except Exception as error:
 
+        print(f"Medical text prediction error: {error}")
+
         raise HTTPException(
             status_code=500,
             detail=f"Medical text prediction failed: {str(error)}"
@@ -549,7 +491,7 @@ def predict_medical_text(
 
 
 # ==========================================
-# 13. RUN APPLICATION
+# 12. RUN APPLICATION
 # ==========================================
 
 if __name__ == "__main__":
