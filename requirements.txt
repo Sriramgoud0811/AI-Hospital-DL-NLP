@@ -1,9 +1,13 @@
 
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 fastapi
 uvicorn[standard]
 python-multipart
 
 ultralytics==8.4.216
+torch==2.9.1+cpu
+torchvision==0.24.1+cpu
 
 scikit-learn==1.6.1
 joblib
