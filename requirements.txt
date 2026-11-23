@@ -1,0 +1,12 @@
+
+fastapi
+uvicorn[standard]
+python-multipart
+
+ultralytics==8.4.216
+
+scikit-learn==1.6.1
+joblib
+nltk
+
+numpy<2
